@@ -131,7 +131,7 @@ mkLegend BubblePlotOpts{..} (min_expr, max_expr) (min_rank, max_rank) =
 mkGradient :: [Colour Double] -> Texture Double
 mkGradient cs = mkLinearGradient stops ((-50) ^& 0) (50 ^& 0) GradPad
   where
-    stops = mkStops $ zipWith (\c x -> (c, x, 1)) cs [0, 1/n .. 1]
+    stops = mkStops $ zipWith (\c x -> (c, x, 1)) cs [0, 1/(n-1) .. 1]
     n = fromIntegral $ length cs
 {-# INLINE mkGradient #-}
 
