@@ -7,7 +7,7 @@ import           Options.Applicative
 
 import           Taiji.View.Commands
 import           Taiji.View.Commands.Network
-import           Taiji.View.Commands.Ranks
+import           Taiji.View.Commands.Rank
 import           Taiji.View.Types
 
 defaultMain :: Options -> IO ()

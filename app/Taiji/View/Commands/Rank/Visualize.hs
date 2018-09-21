@@ -4,7 +4,7 @@
 {-# LANGUAGE RecordWildCards  #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Taiji.View.Commands.Ranks where
+module Taiji.View.Commands.Rank.Visualize where
 
 import           Bio.Utils.Functions    (scale)
 import qualified Data.Text as T
@@ -18,7 +18,6 @@ import           Diagrams.Backend.Cairo (renderCairo)
 import           Diagrams.Prelude       hiding (option, scale, value, normalize)
 import           Graphics.SVGFonts      (textSVG)
 import Data.Colour.Palette.BrewerSet
-import           Options.Applicative
 import           Statistics.Sample
 import Statistics.Correlation (spearman)
 import           Text.Printf
@@ -26,36 +25,6 @@ import           Text.Printf
 import           Taiji.View.Types
 import           Taiji.View.Utils
 
-plotRankParser :: Parser Command
-plotRankParser = fmap ViewRanks $ ViewRanksOpts
-    <$> strOption
-      ( long "expression" )
-    <*> option auto
-      ( long "cv"
-     <> value 1
-     <> help "TFs with coefficient of variance less than the specified value will be removed. (default: 1)"
-      )
-    <*> option auto
-      ( long "min"
-     <> value 1e-4
-     <> help "lowerBound of TF rank." )
-    <*> (optional . strOption) ( long "rowNamesFilter" )
-    <*> (optional . strOption) ( long "output-values" )
-
-normalize :: Table (Double, Double) -> Table (Double, Double)
-normalize = mapRows (uncurry V.zip . first f . V.unzip)
-  where
-    f xs | V.length xs <= 2 = V.map (logBase 2 . (/ V.head xs)) xs
-         | otherwise = scale xs
-
-filtCV :: Double -> V.Vector Double -> Bool
-filtCV cutoff xs = sqrt v / m >= cutoff
-  where
-    (m, v) = meanVarianceUnb xs
-
-filtFC :: Double -> V.Vector Double -> Bool
-filtFC cutoff xs = V.maximum xs / V.minimum xs >= cutoff
-    
 viewRanks :: FilePath -> FilePath -> ViewRanksOpts -> IO ()
 viewRanks input output ViewRanksOpts{..} = do
     rowFilt <- case rowNamesFilter of
@@ -139,12 +108,13 @@ mkGradient cs = mkLinearGradient stops ((-50) ^& 0) (50 ^& 0) GradPad
 colorMapSmooth :: Double -- a value from 0 to 1
                -> V.Vector (Colour Double) -> Colour Double
 colorMapSmooth x colors
-    | n == 2 = blend p (V.head colors) $ V.last colors
-    | otherwise = blend p (colors V.! i) $ colors V.! (i+1)
+    | isNaN x = black
+    | x <0 || x > 1 = error "input value is out of range."
+    | x == 1 = V.last colors
+    | n == 2 = blend (1-p) (V.head colors) $ V.last colors
+    | otherwise = blend (1 - p) (colors V.! i) $ colors V.! (i+1)
   where
-    p = fromIntegral i - x * (fromIntegral n - 1) + 1
-    i | x == 1 = n - 2
-      | otherwise = truncate $ x * (fromIntegral n - 1)
+    (i,p) = properFraction $ x * fromIntegral (n - 1)
     n = V.length colors
 {-# INLINE colorMapSmooth #-}
 
@@ -169,3 +139,17 @@ buYlRd = V.fromList $ reverse $ brewerSet RdYlBu 9
 
 reds :: V.Vector (Colour Double)
 reds = V.fromList [white, red]
+
+normalize :: Table (Double, Double) -> Table (Double, Double)
+normalize = mapRows (uncurry V.zip . first f . V.unzip)
+  where
+    f xs | V.length xs <= 2 = V.map (logBase 2 . (/ V.head xs)) xs
+         | otherwise = scale xs
+
+filtCV :: Double -> V.Vector Double -> Bool
+filtCV cutoff xs = sqrt v / m >= cutoff
+  where
+    (m, v) = meanVarianceUnb xs
+
+filtFC :: Double -> V.Vector Double -> Bool
+filtFC cutoff xs = V.maximum xs / V.minimum xs >= cutoff

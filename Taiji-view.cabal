@@ -19,7 +19,8 @@ executable taiji-view
 
   other-modules:       Taiji.View.Types
                        Taiji.View.Commands
-                       Taiji.View.Commands.Ranks
+                       Taiji.View.Commands.Rank
+                       Taiji.View.Commands.Rank.Visualize
                        Taiji.View.Commands.Network
                        Taiji.View.Utils
 
