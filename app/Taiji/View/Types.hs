@@ -23,4 +23,5 @@ data ViewRanksOpts = ViewRanksOpts
     , minRank :: Double
     , rowNamesFilter :: Maybe FilePath
     , outputValues :: Maybe FilePath
+    , rankRange :: Maybe (Double, Double)
     }

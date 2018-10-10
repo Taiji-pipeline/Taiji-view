@@ -9,6 +9,8 @@ module Taiji.View.Commands.Rank.Visualize where
 import           Bio.Utils.Functions    (scale)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+import Data.Function (on)
+import AI.Clustering.Hierarchical hiding (normalize)
 import Control.Arrow (first)
 import           Data.Colour            (blend)
 import qualified Data.Matrix            as M
@@ -32,13 +34,15 @@ viewRanks input output ViewRanksOpts{..} = do
         Just fl -> do
             names <- T.lines <$> T.readFile fl
             return (`elem` names)
-    table <- normalize . filterRows (const $ filtCV cv . fst . V.unzip) .
+    table <- reorderColumns orderByCluster . reorderRows orderByCluster .
+        normalize .
+        filterRows (const $ filtCV cv . fst . V.unzip) .
         filterRows (const $ V.any ((>=minRank) . fst)) .
         filterRows (flip $ const rowFilt) <$> readData input exprFile
     let w = width dia
         h = height dia
         n = fromIntegral $ M.cols (matrix table) * 50
-        dia = bubblePlot table $ BubblePlotOpts 15 reds
+        dia = bubblePlot table $ BubblePlotOpts 15 reds rankRange
     renderCairo output (dims2D n (n*(h/w))) dia
 
     -- Output table if necessary
@@ -46,9 +50,15 @@ viewRanks input output ViewRanksOpts{..} = do
         Nothing -> return ()
         Just x -> writeTable x (T.pack . show . fst) table
 
+orderByCluster :: ReodrderFn (Double, Double)
+orderByCluster xs = flatten $ hclust Ward (V.fromList xs) dist
+  where
+    dist = euclidean `on` fst . V.unzip . snd
+
 data BubblePlotOpts = BubblePlotOpts
-    { _radius :: Double
-    , _colours :: V.Vector (Colour Double)
+    { _radius :: Double                      -- ^ The size of bubble
+    , _colours :: V.Vector (Colour Double)   -- ^ Color scheme
+    , _rank_range :: Maybe (Double, Double)        -- ^ The range of ranks
     }
 
 bubblePlot :: Table (Double, Double) -> BubblePlotOpts -> Diagram B
@@ -69,11 +79,16 @@ bubblePlot (Table rowlab collab mat) opts@BubblePlotOpts{..}
               in withEnvelope unitEnvelope $
                     square _radius # lw 0 # fc (colorMapSmooth ((r+1)/2) buYlRd)
     expr' = M.fromVector (M.dim expr) $ linearMap (4, _radius) $ M.flatten expr
-    ranks' = M.fromVector (M.dim ranks) $ linearMap (0, 1) $ M.flatten ranks
+    ranks' = M.fromVector (M.dim ranks) $ case _rank_range of
+        Nothing -> linearMap (0, 1) $ M.flatten ranks
+        Just rng -> linearMapBounded rng (0, 1) $ M.flatten ranks
     (ranks, expr) = M.unzip mat
     unitEnvelope = circle _radius # lw 0 :: Diagram B
-    legend = mkLegend opts (V.minimum $ M.flatten expr, V.maximum $ M.flatten expr)
-        (V.minimum $ M.flatten ranks, V.maximum $ M.flatten ranks)
+    legend = mkLegend opts
+        (V.minimum $ M.flatten expr, V.maximum $ M.flatten expr)
+        (case _rank_range of
+            Nothing -> (V.minimum $ M.flatten ranks, V.maximum $ M.flatten ranks)
+            Just r -> r )
 
 mkLegend :: BubblePlotOpts -> (Double, Double) -> (Double, Double) -> Diagram B
 mkLegend BubblePlotOpts{..} (min_expr, max_expr) (min_rank, max_rank) =
@@ -129,6 +144,17 @@ linearMap (lo, hi) xs = V.map f xs
     min' = V.minimum xs
     max' = V.maximum xs
 {-# INLINE linearMap #-}
+
+linearMapBounded :: (Double, Double)    -- ^ Range of input data
+                 -> (Double, Double)    -- ^ Range of output
+                 -> V.Vector Double
+                 -> V.Vector Double
+linearMapBounded (min', max') (lo, hi) xs = V.map f xs
+  where
+    f x | x <= min' = lo
+        | x >= max' = hi
+        | otherwise = lo + (x - min') / (max' - min') * (hi - lo)
+{-# INLINE linearMapBounded #-}
 
 -------------------------------------------------------------------------------
 -- Colours

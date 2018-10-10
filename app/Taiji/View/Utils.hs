@@ -3,6 +3,9 @@
 {-# LANGUAGE RecordWildCards #-}
 module Taiji.View.Utils
     ( Table(..)
+    , ReodrderFn
+    , reorderColumns
+    , reorderRows
     , mapRows
     , filterRows
     , readData
@@ -81,6 +84,7 @@ readTSV input = HM.fromList $ concatMap (f . B.split '\t') content
     f (x:xs) = zipWith (\s v -> ((CI.mk x, CI.mk s), readDouble v)) samples xs
     (header:content) = B.lines input
     samples = tail $ B.split '\t' header
+
 
     {-
 orderByName :: [T.Text] -> ReodrderFn a
