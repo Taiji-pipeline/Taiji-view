@@ -9,6 +9,7 @@ module Taiji.View.Commands.Rank.Visualize where
 import           Bio.Utils.Functions    (scale)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+import qualified Data.HashSet as S
 import Data.Function (on)
 import AI.Clustering.Hierarchical hiding (normalize)
 import Control.Arrow (first)
@@ -29,26 +30,40 @@ import           Taiji.View.Utils
 
 viewRanks :: FilePath -> FilePath -> ViewRanksOpts -> IO ()
 viewRanks input output ViewRanksOpts{..} = do
+    grp <- case colGroup of
+        Nothing -> return Nothing
+        Just fl -> fmap (Just . map (T.splitOn ",") . T.lines) $ T.readFile fl
+
     rowFilt <- case rowNamesFilter of
         Nothing -> return $ const True
         Just fl -> do
             names <- T.lines <$> T.readFile fl
             return (`elem` names)
-    table <- reorderColumns orderByCluster . reorderRows orderByCluster .
+
+    df <- cbind . map (reorderColumns orderByCluster) . groupDataFrame grp .
+        reorderRows orderByCluster .
         normalize .
         filterRows (const $ filtCV cv . fst . V.unzip) .
         filterRows (const $ V.any ((>=minRank) . fst)) .
         filterRows (flip $ const rowFilt) <$> readData input exprFile
+
     let w = width dia
         h = height dia
-        n = fromIntegral $ M.cols (matrix table) * 50
-        dia = bubblePlot table $ BubblePlotOpts 15 reds rankRange
+        n = fromIntegral $ M.cols (_dataframe_data df) * 50
+        dia = bubblePlot df $ BubblePlotOpts 15 reds rankRange
     renderCairo output (dims2D n (n*(h/w))) dia
 
     -- Output table if necessary
     case outputValues of
         Nothing -> return ()
-        Just x -> writeTable x (T.pack . show . fst) table
+        Just x -> writeTable x (T.pack . show . fst) df
+
+groupDataFrame :: Maybe [[T.Text]] -> DataFrame a -> [DataFrame a]
+groupDataFrame Nothing df = [df]
+groupDataFrame (Just grp) df = map (df `csub`) $ grp ++ [others]
+  where
+    others = S.toList $
+        S.fromList (colNames df) `S.difference` S.fromList (concat grp)
 
 orderByCluster :: ReodrderFn (Double, Double)
 orderByCluster xs = flatten $ hclust Ward (V.fromList xs) dist
@@ -61,15 +76,15 @@ data BubblePlotOpts = BubblePlotOpts
     , _rank_range :: Maybe (Double, Double)        -- ^ The range of ranks
     }
 
-bubblePlot :: Table (Double, Double) -> BubblePlotOpts -> Diagram B
-bubblePlot (Table rowlab collab mat) opts@BubblePlotOpts{..}
-    | null rowlab = error "Nothing to plot"
+bubblePlot :: DataFrame (Double, Double) -> BubblePlotOpts -> Diagram B
+bubblePlot df opts@BubblePlotOpts{..}
+    | null (rowNames df) = error "Nothing to plot"
     | otherwise = center bubbles === strutY 30 === center legend
   where
     colnames = alignR $ hsep 1 $ map
         (\x -> (alignB $ textBounded x # rotate (90 @@ deg)) <> unitEnvelope) $
-        collab ++ [""]
-    bubbles = vsep 1 $ (colnames:) $ zipWith drawBubble rowlab $ M.toLists $
+        colNames df ++ [""]
+    bubbles = vsep 1 $ (colnames:) $ zipWith drawBubble (rowNames df) $ M.toLists $
         M.zip ranks' expr'
     drawBubble lab xs = alignR $ textBounded lab ||| strutX 5 ||| bb ||| cor
       where
@@ -82,7 +97,7 @@ bubblePlot (Table rowlab collab mat) opts@BubblePlotOpts{..}
     ranks' = M.fromVector (M.dim ranks) $ case _rank_range of
         Nothing -> linearMap (0, 1) $ M.flatten ranks
         Just rng -> linearMapBounded rng (0, 1) $ M.flatten ranks
-    (ranks, expr) = M.unzip mat
+    (ranks, expr) = M.unzip $ _dataframe_data df
     unitEnvelope = circle _radius # lw 0 :: Diagram B
     legend = mkLegend opts
         (V.minimum $ M.flatten expr, V.maximum $ M.flatten expr)
@@ -166,7 +181,7 @@ buYlRd = V.fromList $ reverse $ brewerSet RdYlBu 9
 reds :: V.Vector (Colour Double)
 reds = V.fromList [white, red]
 
-normalize :: Table (Double, Double) -> Table (Double, Double)
+normalize :: DataFrame (Double, Double) -> DataFrame (Double, Double)
 normalize = mapRows (uncurry V.zip . first f . V.unzip)
   where
     f xs | V.length xs <= 2 = V.map (logBase 2 . (/ V.head xs)) xs

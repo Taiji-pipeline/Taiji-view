@@ -15,7 +15,6 @@ defaultMain (Options input output cmd) = case cmd of
     ShowRegulTable opt -> mkRegulatoryTable input output opt
     ShowNetwork -> showNetwork input output
     ViewRanks opt -> viewRanks input output opt
-    _ -> undefined
 
 main :: IO ()
 main = defaultMain =<< execParser opts

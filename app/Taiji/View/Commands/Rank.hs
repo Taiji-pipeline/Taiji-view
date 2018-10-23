@@ -31,6 +31,7 @@ plotRankParser = fmap ViewRanks $ ViewRanksOpts
     <*> (optional . strOption) ( long "rowNamesFilter" )
     <*> (optional . strOption) ( long "output-values" )
     <*> (optional . option (maybeReader f)) ( long "rank-range" )
+    <*> (optional . strOption) ( long "groups" )
   where
     f x = let [a,b] = T.splitOn "," $ T.pack x
           in Just (read $ T.unpack a, read $ T.unpack b)

@@ -24,4 +24,5 @@ data ViewRanksOpts = ViewRanksOpts
     , rowNamesFilter :: Maybe FilePath
     , outputValues :: Maybe FilePath
     , rankRange :: Maybe (Double, Double)
+    , colGroup :: Maybe FilePath
     }

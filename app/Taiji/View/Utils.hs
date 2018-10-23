@@ -2,7 +2,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 module Taiji.View.Utils
-    ( Table(..)
+    ( DataFrame(..)
+    , DataFrameIndex(..)
+    , cbind
+    , rowNames
+    , colNames
     , ReodrderFn
     , reorderColumns
     , reorderRows
@@ -24,43 +28,102 @@ import qualified Data.Matrix            as M
 import qualified Data.Vector            as V
 import qualified Data.HashMap.Strict    as HM
 
-data Table a = Table
-    { rowNames :: [T.Text]
-    , colNames :: [T.Text]
-    , matrix   :: M.Matrix a
+data DataFrame a = DataFrame
+    { _dataframe_row_names :: V.Vector T.Text
+    , _dataframe_row_names_idx :: HM.HashMap T.Text Int
+    , _dataframe_col_names :: V.Vector T.Text
+    , _dataframe_col_names_idx :: HM.HashMap T.Text Int
+    , _dataframe_data :: M.Matrix a
     } deriving (Show)
 
-mapRows :: (V.Vector a -> V.Vector b) -> Table a -> Table b
-mapRows fn table = table { matrix = matrix' }
-  where
-    matrix' = M.fromRows $ map fn $ M.toRows $ matrix table
+mkDataFrame :: [T.Text]     -- ^ row names
+            -> [T.Text]     -- ^ col names
+            -> [[a]]        -- ^ data
+            -> DataFrame a
+mkDataFrame r c d = DataFrame
+    { _dataframe_row_names = V.fromList r
+    , _dataframe_row_names_idx = HM.fromList $ zip r [0..]
+    , _dataframe_col_names = V.fromList c
+    , _dataframe_col_names_idx = HM.fromList $ zip c [0..]
+    , _dataframe_data = M.fromLists d }
 
-filterRows :: (T.Text -> V.Vector a -> Bool) -> Table a -> Table a
-filterRows fn table = table { rowNames = names, matrix = M.fromRows rows }
+class DataFrameIndex i where
+    csub :: DataFrame a -> [i] -> DataFrame a
+
+instance DataFrameIndex Int where
+    csub df idx = df
+        { _dataframe_col_names = V.fromList col_names
+        , _dataframe_col_names_idx = HM.fromList $ zip col_names [0..]
+        , _dataframe_data = M.fromColumns $ map (_dataframe_data df `M.takeColumn`) idx }
+      where
+        col_names = map (_dataframe_col_names df V.!) idx
+
+instance DataFrameIndex T.Text where
+    csub df idx = csub df idx'
+      where
+        idx' = map (\i -> HM.lookupDefault
+            (error $ "index doesn't exist: " ++ T.unpack i) i $
+            _dataframe_col_names_idx df) idx
+
+cbind :: [DataFrame a] -> DataFrame a
+cbind dfs | allTheSame (map _dataframe_row_names dfs) = DataFrame
+    { _dataframe_row_names = row_names
+    , _dataframe_row_names_idx = HM.fromList $ zip (V.toList row_names) [0..]
+    , _dataframe_col_names = col_names
+    , _dataframe_col_names_idx = HM.fromList $ zip (V.toList col_names) [0..]
+    , _dataframe_data = M.fromBlocks undefined [map _dataframe_data dfs] }
+          | otherwise = error "Row names differ"
   where
-    (names, rows) = unzip $ filter (uncurry fn) $ zip (rowNames table) $ M.toRows $
-        matrix table
+    allTheSame xs = all (== head xs) (tail xs)
+    row_names = V.concat $ map (_dataframe_row_names) dfs
+    col_names = V.concat $ map (_dataframe_col_names) dfs
+
+rowNames :: DataFrame a -> [T.Text]
+rowNames DataFrame{..} = V.toList _dataframe_row_names
+
+colNames :: DataFrame a -> [T.Text]
+colNames DataFrame{..} = V.toList _dataframe_col_names
+
+mapRows :: (V.Vector a -> V.Vector b) -> DataFrame a -> DataFrame b
+mapRows fn df = df
+    { _dataframe_data = M.fromRows $ map fn $ M.toRows $ _dataframe_data df }
+
+filterRows :: (T.Text -> V.Vector a -> Bool) -> DataFrame a -> DataFrame a
+filterRows fn df = df
+    { _dataframe_row_names = V.fromList names
+    , _dataframe_data = M.fromRows rows }
+  where
+    (names, rows) = unzip $ filter (uncurry fn) $
+        zip (V.toList $ _dataframe_row_names df) $ M.toRows $ _dataframe_data df
 
 type ReodrderFn a = [(T.Text, V.Vector a)] -> [(T.Text, V.Vector a)]
 
-reorderRows :: ReodrderFn a -> Table a -> Table a
-reorderRows fn table = table
-    { rowNames = names
-    , matrix = M.fromRows rows }
+reorderRows :: ReodrderFn a -> DataFrame a -> DataFrame a
+reorderRows fn df = df
+    { _dataframe_row_names = V.fromList names
+    , _dataframe_data = M.fromRows rows }
   where
-    (names, rows) = unzip $ fn $ zip (rowNames table) $ M.toRows $ matrix table
+    (names, rows) = unzip $ fn $ zip (V.toList $ _dataframe_row_names df) $
+        M.toRows $ _dataframe_data df
 
-reorderColumns :: ReodrderFn a -> Table a -> Table a
-reorderColumns fn table = table
-    { colNames = names
-    , matrix = M.fromColumns cols}
+reorderColumns :: ReodrderFn a -> DataFrame a -> DataFrame a
+reorderColumns fn df = df
+    { _dataframe_col_names = V.fromList names
+    , _dataframe_data = M.fromColumns cols}
   where
-    (names, cols) = unzip $ fn $ zip (colNames table) $ M.toColumns $ matrix table
+    (names, cols) = unzip $ fn $ zip (V.toList $ _dataframe_col_names df) $
+        M.toColumns $ _dataframe_data df
+
+writeTable :: FilePath -> (a -> T.Text) -> DataFrame a -> IO ()
+writeTable output f DataFrame{..} = T.writeFile output $ T.unlines $
+    map (T.intercalate "\t") $ ("" : V.toList _dataframe_col_names) :
+    zipWith (:) (V.toList _dataframe_row_names)
+    ((map . map) f $ M.toLists _dataframe_data)
 
 -- | Read data, normalize and calculate p-values.
 readData :: FilePath   -- ^ PageRank
          -> FilePath   -- ^ Gene expression
-         -> IO (Table (Double, Double))  -- ^ ranks, expression
+         -> IO (DataFrame (Double, Double))  -- ^ ranks, expression
 readData input1 input2 = do
     rank <- readTSV <$> B.readFile input1
 
@@ -71,12 +134,7 @@ readData input1 input2 = do
             HM.toList $ HM.intersectionWith (,) rank expr
         rowlab = map (T.pack . B.unpack . CI.original) $ fst $ unzip $ map head labels
         collab = map (T.pack . B.unpack . CI.original) $ snd $ unzip $ head labels
-    return $ Table rowlab collab $ M.fromLists xs
-
-writeTable :: FilePath -> (a -> T.Text) -> Table a -> IO ()
-writeTable output f Table{..} = T.writeFile output $ T.unlines $
-    map (T.intercalate "\t") $ ("" : colNames) :
-    zipWith (:) rowNames ((map . map) f $ M.toLists matrix)
+    return $ mkDataFrame rowlab collab xs
 
 readTSV :: B.ByteString -> HM.HashMap (CI.CI B.ByteString, CI.CI B.ByteString) Double
 readTSV input = HM.fromList $ concatMap (f . B.split '\t') content
