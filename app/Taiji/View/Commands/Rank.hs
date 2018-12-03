@@ -17,11 +17,11 @@ import Taiji.View.Commands.Rank.Visualize
 
 plotRankParser :: Parser Command
 plotRankParser = fmap ViewRanks $ ViewRanksOpts
-    <$> strOption
+    <$> (optional . strOption)
       ( long "expression" )
     <*> option auto
       ( long "cv"
-     <> value 1
+     <> value 0.5
      <> help "TFs with coefficient of variance less than the specified value will be removed. (default: 1)"
       )
     <*> option auto

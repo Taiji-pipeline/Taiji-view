@@ -18,7 +18,7 @@ data ShowRegulTableOpts = ShowRegulTableOpts
     , binarize :: Maybe Double }
 
 data ViewRanksOpts = ViewRanksOpts
-    { exprFile :: FilePath
+    { exprFile :: Maybe FilePath
     , cv :: Double
     , minRank :: Double
     , rowNamesFilter :: Maybe FilePath

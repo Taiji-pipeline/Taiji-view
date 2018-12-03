@@ -26,7 +26,8 @@ import Statistics.Correlation (spearman)
 import           Text.Printf
 
 import           Taiji.View.Types
-import           Taiji.View.Utils
+import           Taiji.View.Utils hiding (zip, unzip)
+import qualified Taiji.View.Utils as U
 
 viewRanks :: FilePath -> FilePath -> ViewRanksOpts -> IO ()
 viewRanks input output ViewRanksOpts{..} = do
@@ -40,23 +41,41 @@ viewRanks input output ViewRanksOpts{..} = do
             names <- T.lines <$> T.readFile fl
             return (`elem` names)
 
-    df <- cbind . map (reorderColumns orderByCluster) . groupDataFrame grp .
-        reorderRows orderByCluster .
-        normalize .
-        filterRows (const $ filtCV cv . fst . V.unzip) .
-        filterRows (const $ V.any ((>=minRank) . fst)) .
-        filterRows (flip $ const rowFilt) <$> readData input exprFile
+    df <- case exprFile of
+        Just fl -> do
+            mat <- cbind .
+                map (reorderColumns (orderByCluster fst)) .
+                groupDataFrame grp .
+                reorderRows (orderByCluster fst) .
+                uncurry U.zip . first normalize . U.unzip .
+                filterRows (const $ filtCV cv . fst . V.unzip) .
+                filterRows (const $ V.any ((>=minRank) . fst)) .
+                filterRows (flip $ const rowFilt) <$> readData input fl
+            case outputValues of
+                Nothing -> return ()
+                Just x -> writeTable x (T.pack . show . fst) mat
+            return $ Left mat
+        Nothing -> do
+            mat <- cbind .
+                map (reorderColumns (orderByCluster id)) .
+                groupDataFrame grp .
+                reorderRows (orderByCluster id) .
+                normalize .
+                filterRows (const $ filtCV cv) .
+                filterRows (const $ V.any (>=minRank)) .
+                filterRows (flip $ const rowFilt) <$> readTable input
+            case outputValues of
+                Nothing -> return ()
+                Just x -> writeTable x (T.pack . show) mat
+            return $ Right mat
 
     let w = width dia
         h = height dia
-        n = fromIntegral $ M.cols (_dataframe_data df) * 50
+        n = fromIntegral (either (M.cols . _dataframe_data)
+            (M.cols . _dataframe_data) df) * 50
         dia = bubblePlot df $ BubblePlotOpts 15 reds rankRange
     renderCairo output (dims2D n (n*(h/w))) dia
 
-    -- Output table if necessary
-    case outputValues of
-        Nothing -> return ()
-        Just x -> writeTable x (T.pack . show . fst) df
 
 groupDataFrame :: Maybe [[T.Text]] -> DataFrame a -> [DataFrame a]
 groupDataFrame Nothing df = [df]
@@ -65,10 +84,10 @@ groupDataFrame (Just grp) df = map (df `csub`) $ grp ++ [others]
     others = S.toList $
         S.fromList (colNames df) `S.difference` S.fromList (concat grp)
 
-orderByCluster :: ReodrderFn (Double, Double)
-orderByCluster xs = flatten $ hclust Ward (V.fromList xs) dist
+orderByCluster :: (a -> Double) -> ReodrderFn a 
+orderByCluster f xs = flatten $ hclust Ward (V.fromList xs) dist
   where
-    dist = euclidean `on` fst . V.unzip . snd
+    dist = euclidean `on` V.map f . snd
 
 data BubblePlotOpts = BubblePlotOpts
     { _radius :: Double                      -- ^ The size of bubble
@@ -76,16 +95,41 @@ data BubblePlotOpts = BubblePlotOpts
     , _rank_range :: Maybe (Double, Double)        -- ^ The range of ranks
     }
 
-bubblePlot :: DataFrame (Double, Double) -> BubblePlotOpts -> Diagram B
-bubblePlot df opts@BubblePlotOpts{..}
+bubblePlot :: Either (DataFrame (Double, Double)) (DataFrame Double)
+           -> BubblePlotOpts -> Diagram B
+bubblePlot (Left df) opts@BubblePlotOpts{..}
     | null (rowNames df) = error "Nothing to plot"
     | otherwise = center bubbles === strutY 30 === center legend
   where
-    colnames = alignR $ hsep 1 $ map
-        (\x -> (alignB $ textBounded x # rotate (90 @@ deg)) <> unitEnvelope) $
-        colNames df ++ [""]
-    bubbles = vsep 1 $ (colnames:) $ zipWith drawBubble (rowNames df) $ M.toLists $
-        M.zip ranks' expr'
+    bubbles = drawBubbles df{_dataframe_data = M.zip ranks' expr'} opts
+    legend = mkLegend opts
+        (V.minimum $ M.flatten expr, V.maximum $ M.flatten expr)
+        (case _rank_range of
+            Nothing -> (V.minimum $ M.flatten ranks, V.maximum $ M.flatten ranks)
+            Just r -> r )
+    expr' = M.fromVector (M.dim expr) $ linearMap (4, _radius) $ M.flatten expr
+    ranks' = M.fromVector (M.dim ranks) $ case _rank_range of
+        Nothing -> linearMap (0, 1) $ M.flatten ranks
+        Just rng -> linearMapBounded rng (0, 1) $ M.flatten ranks
+    (ranks, expr) = M.unzip $ _dataframe_data df
+bubblePlot (Right df) opts@BubblePlotOpts{..}
+    | null (rowNames df) = error "Nothing to plot"
+    | otherwise = center bubbles === strutY 30 === center legend
+  where
+    bubbles = drawBubbles df{_dataframe_data = M.zip expr' ranks'} opts
+    expr' = M.fromVector (M.dim ranks) $ V.replicate (uncurry (*) $ M.dim ranks) 0.7
+    ranks' = M.fromVector (M.dim ranks) $ linearMap (4, _radius) $ M.flatten ranks
+    ranks = _dataframe_data df
+    legend = mkCircleLegend "normalized rank score"
+        ( V.minimum $ M.flatten $ _dataframe_data df
+        , V.maximum $ M.flatten $ _dataframe_data df) _radius
+
+drawBubbles :: DataFrame (Double, Double)
+            -> BubblePlotOpts 
+            -> Diagram B
+drawBubbles df BubblePlotOpts{..} = vsep 1 $ (colnames:) $
+    zipWith drawBubble (rowNames df) $ M.toLists $ M.zip ranks' expr'
+  where
     drawBubble lab xs = alignR $ textBounded lab ||| strutX 5 ||| bb ||| cor
       where
         bb = hsep 1 $ flip map xs $ \(x,y) -> withEnvelope unitEnvelope $
@@ -93,48 +137,58 @@ bubblePlot df opts@BubblePlotOpts{..}
         cor = let r = spearman $ V.fromList xs
               in withEnvelope unitEnvelope $
                     square _radius # lw 0 # fc (colorMapSmooth ((r+1)/2) buYlRd)
-    expr' = M.fromVector (M.dim expr) $ linearMap (4, _radius) $ M.flatten expr
-    ranks' = M.fromVector (M.dim ranks) $ case _rank_range of
-        Nothing -> linearMap (0, 1) $ M.flatten ranks
-        Just rng -> linearMapBounded rng (0, 1) $ M.flatten ranks
-    (ranks, expr) = M.unzip $ _dataframe_data df
-    unitEnvelope = circle _radius # lw 0 :: Diagram B
-    legend = mkLegend opts
-        (V.minimum $ M.flatten expr, V.maximum $ M.flatten expr)
-        (case _rank_range of
-            Nothing -> (V.minimum $ M.flatten ranks, V.maximum $ M.flatten ranks)
-            Just r -> r )
+    colnames = alignR $ hsep 1 $ map
+        (\x -> (alignB $ textBounded x # rotate (90 @@ deg)) <> unitEnvelope) $
+        colNames df ++ [""]
+    (ranks', expr') = M.unzip $ _dataframe_data df
+    unitEnvelope = circle _radius # lw 0
 
 mkLegend :: BubblePlotOpts -> (Double, Double) -> (Double, Double) -> Diagram B
 mkLegend BubblePlotOpts{..} (min_expr, max_expr) (min_rank, max_rank) =
     hsep 50 [rank_legend, expr_legend, cor_legend]
   where
-    expr_legend = center ( hsep 1 $ map (\(x,s) -> withEnvelope unitEnvelope
-        (circle s # lw 0 # fc black) === strutY 2 === textBounded (T.pack $ printf "%.2f" x)) $
-        zip exprs $ V.toList $ linearMap (4, _radius) $ V.fromList exprs ) ===
-        strutY 2 === textBounded "inverse hyperbolic sine of expression level"
-    rank_legend = vsep 2 $
-        [ rect 100 25 # lw 0 # fillTexture (mkGradient $ V.toList _colours)
-        , center $ position $ zip [0^&0, 50^&0, 100^&0] $
-            map (textBounded . T.pack . printf "%.2f") ranks
-        , textBounded "normalized rank score" ]
-    cor_legend = vsep 2 $
-        [ rect 100 25 # lw 0 # fillTexture (mkGradient $ V.toList buYlRd)
+    expr_legend = mkCircleLegend "inverse hyperbolic sine of expression level"
+        (min_expr, max_expr) _radius
+    rank_legend = mkColorLegend "normalized rank score" (min_rank, max_rank) _colours
+    cor_legend = vsep 2
+        [ rect 100 25 # lw 0 # fillTexture (mkGradient buYlRd)
         , center $ position $ zip [0^&0, 50^&0, 100^&0] $ map textBounded ["-1", "0", "1"]
         , textBounded "Spearman's correlation" ]
-    exprs = [min_expr, min_expr + (max_expr - min_expr) / 3 .. max_expr]
-    ranks = [min_rank, min_rank + (max_rank - min_rank) / 2, max_rank]
-    unitEnvelope = circle _radius # lw 0 :: Diagram B
 {-# INLINE mkLegend #-}
 
-mkGradient :: [Colour Double] -> Texture Double
+mkColorLegend :: T.Text   -- ^ Title
+              -> (Double, Double)  -- ^ lower and upper bound
+              -> V.Vector (Colour Double)   -- ^ color scheme
+              -> Diagram B
+mkColorLegend title (lo, hi) colors = vsep 2 $
+    [ rect 100 25 # lw 0 # fillTexture (mkGradient colors)
+    , center $ position $ zip [0^&0, 50^&0, 100^&0] $
+        map (textBounded . T.pack . printf "%.2f") values
+    , textBounded title ]
+  where
+    values = [lo, lo + (hi - lo) / 2, hi]
+
+mkCircleLegend :: T.Text   -- ^ Title
+               -> (Double, Double)     -- ^ Lower and upper bound
+               -> Double    -- ^ radius
+               -> Diagram B
+mkCircleLegend title (lo, hi) r = center
+    ( hsep 1 $ map (\(x,s) -> withEnvelope unitEnvelope
+    (circle s # lw 0 # fc black) === strutY 2 === textBounded (T.pack $ printf "%.2f" x)) $
+    zip values $ V.toList $ linearMap (4, r) $ V.fromList values ) ===
+    strutY 2 === textBounded title
+  where
+    values = [lo, lo + (hi - lo) / 3 .. hi]
+    unitEnvelope = circle r # lw 0 :: Diagram B
+
+mkGradient :: V.Vector (Colour Double) -> Texture Double
 mkGradient cs = mkLinearGradient stops ((-50) ^& 0) (50 ^& 0) GradPad
   where
-    stops = mkStops $ zipWith (\c x -> (c, x, 1)) cs [0, 1/(n-1) .. 1]
-    n = fromIntegral $ length cs
+    stops = mkStops $ zipWith (\c x -> (c, x, 1)) (V.toList cs) [0, 1/(n-1) .. 1]
+    n = fromIntegral $ V.length cs
 {-# INLINE mkGradient #-}
 
--- | map numbers to colors
+-- | Map numbers to colors
 colorMapSmooth :: Double -- a value from 0 to 1
                -> V.Vector (Colour Double) -> Colour Double
 colorMapSmooth x colors
@@ -181,16 +235,19 @@ buYlRd = V.fromList $ reverse $ brewerSet RdYlBu 9
 reds :: V.Vector (Colour Double)
 reds = V.fromList [white, red]
 
-normalize :: DataFrame (Double, Double) -> DataFrame (Double, Double)
-normalize = mapRows (uncurry V.zip . first f . V.unzip)
+-- | Normalize the data frame.
+normalize :: DataFrame Double -> DataFrame Double
+normalize = mapRows f
   where
     f xs | V.length xs <= 2 = V.map (logBase 2 . (/ V.head xs)) xs
          | otherwise = scale xs
 
+-- | Determine whether the input pass the CV cutoff
 filtCV :: Double -> V.Vector Double -> Bool
 filtCV cutoff xs = sqrt v / m >= cutoff
   where
     (m, v) = meanVarianceUnb xs
 
+-- | Determine whether the input pass the fold-change cutoff
 filtFC :: Double -> V.Vector Double -> Bool
 filtFC cutoff xs = V.maximum xs / V.minimum xs >= cutoff
