@@ -1,12 +1,12 @@
 name:                Taiji-view
 version:             0.1.0
-synopsis:            Initial project template from stack
+synopsis:            Visualization framework for Taiji
 description:         Please see README.md
 license:             BSD3
 license-file:        LICENSE
 author:              Kai Zhang
 maintainer:          kai@kzhang.org
-copyright:           (c) 2018 Kai Zhang
+copyright:           (c) 2018-2019 Kai Zhang
 category:            Web
 build-type:          Simple
 extra-source-files:  README.md
@@ -18,15 +18,14 @@ executable taiji-view
   ghc-options:         -threaded -Wall
 
   other-modules:       Taiji.View.Types
-                       Taiji.View.Commands
+                       Taiji.View.Commands.QC
                        Taiji.View.Commands.Rank
-                       Taiji.View.Commands.Rank.Visualize
-                       Taiji.View.Commands.Network
                        Taiji.View.Utils
 
   build-depends:
       base >= 4.7 && < 5
-    , bioinformatics-toolkit >= 0.5.0
+    , aeson
+    , bioinformatics-toolkit >= 0.6.0
     , bytestring
     , bytestring-lexing
     , case-insensitive
@@ -38,10 +37,12 @@ executable taiji-view
     , diagrams-lib
     , diagrams-cairo
     , haskell-igraph >= 0.7.0
+    , inline-r
     , matrices
     , optparse-applicative
     , palette
     , statistics >= 0.14.0
+    , shelly
     , text
     , SVGFonts
     , vector
