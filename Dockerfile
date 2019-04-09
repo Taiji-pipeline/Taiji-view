@@ -13,5 +13,5 @@ RUN mkdir -p ~/.local/bin
 RUN curl -Lk https://www.stackage.org/stack/linux-x86_64 | \
     tar xz --strip-components=1 -C ~/.local/bin
 
-RUN git clone https://github.com/Taiji-pipeline/Taiji-view.git && cd Taiji-view
-RUN stack install
+RUN git clone https://github.com/Taiji-pipeline/Taiji-view.git 
+RUN cd Taiji-view && stack install
