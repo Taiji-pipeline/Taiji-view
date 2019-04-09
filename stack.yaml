@@ -14,9 +14,6 @@ extra-deps:
 - git:     https://github.com/Taiji-pipeline/Taiji-types.git
   commit:  9466d7f69977778f50bfdd60fd4fbf62a93dea7b
 
-- git:     https://github.com/kaizhang/haskell-igraph.git
-  commit:  e9db8aad4ca005257a464a5eff0e5ff15aa761b2
-
 - git:     https://github.com/kaizhang/bioinformatics-toolkit.git
   commit:  d1ce0f73c04c77edd674cad92904789f5fd46409
   subdirs:

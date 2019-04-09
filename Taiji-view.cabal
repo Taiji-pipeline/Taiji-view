@@ -36,7 +36,6 @@ executable taiji-view
     , diagrams-core
     , diagrams-lib
     , diagrams-cairo
-    , haskell-igraph >= 0.7.0
     , inline-r
     , matrices
     , optparse-applicative
